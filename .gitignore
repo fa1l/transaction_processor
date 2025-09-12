@@ -1,0 +1,8 @@
+*.json
+*.txt
+*.svg
+*.csv.gz
+.env
+target
+doc
+
