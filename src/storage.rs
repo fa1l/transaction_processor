@@ -10,16 +10,30 @@ use crate::errors::{AccountError, TransactionError};
 pub type UserId = u16;
 
 pub struct UserAccount {
-    balance: Decimal,
-    holded: Decimal,
+    available_amount: Decimal,
+    held_amount: Decimal,
     locked: bool,
+}
+
+impl UserAccount {
+    pub fn total_balance(&self) -> Decimal {
+        return self.available_amount + self.held_amount;
+    }
+
+    pub fn available_balance(&self) -> Decimal {
+        return self.available_amount;
+    }
+
+    pub fn held_balance(&self) -> Decimal {
+        return self.held_amount;
+    }
 }
 
 impl Default for UserAccount {
     fn default() -> Self {
         UserAccount {
-            balance: Decimal::ZERO,
-            holded: Decimal::ZERO,
+            available_amount: Decimal::ZERO,
+            held_amount: Decimal::ZERO,
             locked: false,
         }
     }
@@ -61,7 +75,7 @@ impl InMemoryAccountsStorage {
                 if account.locked {
                     warn!("Looking blocked account balance");
                 }
-                Some(account.balance)
+                Some(account.available_amount)
             }
             None => {
                 warn!("Unknown account");
@@ -87,19 +101,19 @@ impl Storage for InMemoryAccountsStorage {
         match storage.entry(user_id) {
             Entry::Vacant(entry) => {
                 entry.insert(UserAccount {
-                    balance: amount,
-                    holded: Decimal::ZERO,
+                    available_amount: amount,
+                    held_amount: Decimal::ZERO,
                     locked: false,
                 });
             }
             Entry::Occupied(mut entry) => {
-                let acc = entry.get_mut();
-                if acc.locked {
+                let account = entry.get_mut();
+                if account.locked {
                     warn!("Trying to add money to locked account");
                     return Err(Box::new(AccountError::AccountLocked));
                 }
-                match acc.balance.checked_add(amount) {
-                    Some(new_balance) => acc.balance = new_balance,
+                match account.available_amount.checked_add(amount) {
+                    Some(new_balance) => account.available_amount = new_balance,
                     None => {
                         error!(
                             "Got balance overflow for account {user_id}, need to solve this manually"
@@ -120,17 +134,17 @@ impl Storage for InMemoryAccountsStorage {
                 return Err(Box::new(AccountError::AccountNotFound));
             }
             Entry::Occupied(mut entry) => {
-                let acc = entry.get_mut();
-                if acc.locked {
+                let account = entry.get_mut();
+                if account.locked {
                     warn!("Trying to withdraw money from locked account");
                     return Err(Box::new(AccountError::AccountLocked));
                 }
-                if acc.balance < amount {
+                if account.available_amount < amount {
                     warn!("Trying to withdraw more money then account has");
                     return Err(Box::new(AccountError::InsufficientMoney));
                 }
-                match acc.balance.checked_sub(amount) {
-                    Some(new_balance) => acc.balance = new_balance,
+                match account.available_amount.checked_sub(amount) {
+                    Some(new_balance) => account.available_amount = new_balance,
                     None => {
                         // kind of impossible, but let it be
                         error!(
