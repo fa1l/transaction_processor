@@ -28,7 +28,7 @@ impl Default for UserAccount {
 pub trait Storage {
     fn create_user(&self, user_id: UserId);
     fn add_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
-    fn decrease_money(&self, user_id: UserId, amount: Decimal);
+    fn withdraw_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
     fn hold_money(&self, user_id: UserId, amount: Decimal);
 }
 
@@ -43,7 +43,7 @@ impl InMemoryAccountsStorage {
         }
     }
 
-    fn is_locked(&self, user_id: UserId) -> Option<bool> {
+    pub fn is_locked(&self, user_id: UserId) -> Option<bool> {
         let storage = self.accounts.read().unwrap();
         match storage.get(&user_id) {
             Some(account) => Some(account.locked),
@@ -54,7 +54,7 @@ impl InMemoryAccountsStorage {
         }
     }
 
-    fn get_balance(&self, user_id: UserId) -> Option<Decimal> {
+    pub fn get_balance(&self, user_id: UserId) -> Option<Decimal> {
         let storage = self.accounts.read().unwrap();
         match storage.get(&user_id) {
             Some(account) => {
@@ -112,7 +112,38 @@ impl Storage for InMemoryAccountsStorage {
         Ok(())
     }
 
-    fn decrease_money(&self, user_id: UserId, amount: Decimal) {}
+    fn withdraw_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>> {
+        let mut storage = self.accounts.write().unwrap();
+        match storage.entry(user_id) {
+            Entry::Vacant(_entry) => {
+                warn!("Trying to withdraw money from unknown account");
+                return Err(Box::new(AccountError::AccountNotFound));
+            }
+            Entry::Occupied(mut entry) => {
+                let acc = entry.get_mut();
+                if acc.locked {
+                    warn!("Trying to withdraw money from locked account");
+                    return Err(Box::new(AccountError::AccountLocked));
+                }
+                if acc.balance < amount {
+                    warn!("Trying to withdraw more money then account has");
+                    return Err(Box::new(AccountError::InsufficientMoney));
+                }
+                match acc.balance.checked_sub(amount) {
+                    Some(new_balance) => acc.balance = new_balance,
+                    None => {
+                        // kind of impossible, but let it be
+                        error!(
+                            "Got balance overflow for account {user_id}, need to solve this manually"
+                        );
+                        return Err(Box::new(AccountError::BalanceOverflow));
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
+
     fn hold_money(&self, user_id: UserId, amount: Decimal) {}
 }
 
@@ -203,5 +234,72 @@ mod tests {
         let account_error = error.downcast_ref::<AccountError>().unwrap();
         assert_eq!(*account_error, AccountError::BalanceOverflow);
         assert_eq!(storage.get_balance(user_id), Some(max_decimal));
+    }
+
+    #[test]
+    fn test_withdraw_money_successful() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+        let withdraw_amount = dec!(30.00);
+        let expected_balance = dec!(70.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        let result = storage.withdraw_money(user_id, withdraw_amount);
+
+        assert!(result.is_ok());
+        assert_eq!(storage.get_balance(user_id), Some(expected_balance));
+    }
+
+    #[test]
+    fn test_withdraw_money_insufficient_funds() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(50.00);
+        let withdraw_amount = dec!(100.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        let result = storage.withdraw_money(user_id, withdraw_amount);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::InsufficientMoney);
+        assert_eq!(storage.get_balance(user_id), Some(initial_amount));
+    }
+
+    #[test]
+    fn test_withdraw_money_from_nonexistent_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 999;
+        let withdraw_amount = dec!(50.00);
+
+        let result = storage.withdraw_money(user_id, withdraw_amount);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::AccountNotFound);
+    }
+
+    #[test]
+    fn test_withdraw_money_from_locked_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+        let withdraw_amount = dec!(30.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        {
+            let mut accounts = storage.accounts.write().unwrap();
+            accounts.get_mut(&user_id).unwrap().locked = true;
+        }
+        let result = storage.withdraw_money(user_id, withdraw_amount);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::AccountLocked);
+        assert_eq!(storage.get_balance(user_id), Some(initial_amount));
     }
 }

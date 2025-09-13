@@ -23,6 +23,7 @@ impl std::error::Error for AccountError {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransactionError {
+    NegativeAmount,
     OriginTransactionNotFound,
     TransactionNotDisputed,
     MultipleTransactionDispute,
@@ -31,6 +32,7 @@ pub enum TransactionError {
 impl fmt::Display for TransactionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            TransactionError::NegativeAmount => write!(f, "Transaction provides negative amount"),
             TransactionError::OriginTransactionNotFound => {
                 write!(f, "Origin transaction not found")
             }
