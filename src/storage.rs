@@ -1,0 +1,136 @@
+use std::collections::hash_map::Entry;
+use std::sync::RwLock;
+use std::{collections::HashMap, error::Error};
+use tracing::{error, warn};
+
+use rust_decimal::Decimal;
+
+use crate::errors::{AccountError, TransactionError};
+
+pub type UserId = u16;
+
+pub struct UserAccount {
+    balance: Decimal,
+    holded: Decimal,
+    locked: bool,
+}
+
+impl Default for UserAccount {
+    fn default() -> Self {
+        UserAccount {
+            balance: Decimal::ZERO,
+            holded: Decimal::ZERO,
+            locked: false,
+        }
+    }
+}
+
+pub trait Storage {
+    fn create_user(&self, user_id: UserId);
+    fn add_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
+    fn decrease_money(&self, user_id: UserId, amount: Decimal);
+    fn hold_money(&self, user_id: UserId, amount: Decimal);
+}
+
+pub struct InMemoryAccountsStorage {
+    accounts: RwLock<HashMap<UserId, UserAccount>>,
+}
+
+impl InMemoryAccountsStorage {
+    pub fn new() -> Self {
+        Self {
+            accounts: RwLock::new(HashMap::new()),
+        }
+    }
+
+    fn is_locked(&self, user_id: UserId) -> Option<bool> {
+        let storage = self.accounts.read().unwrap();
+        match storage.get(&user_id) {
+            Some(account) => Some(account.locked),
+            None => {
+                warn!("Unknown account");
+                None
+            }
+        }
+    }
+
+    fn get_balance(&self, user_id: UserId) -> Option<Decimal> {
+        let storage = self.accounts.read().unwrap();
+        match storage.get(&user_id) {
+            Some(account) => {
+                if account.locked {
+                    warn!("Looking blocked account balance");
+                }
+                Some(account.balance)
+            }
+            None => {
+                warn!("Unknown account");
+                None
+            }
+        }
+    }
+}
+
+impl Storage for InMemoryAccountsStorage {
+    fn create_user(&self, user_id: UserId) {
+        let mut storage = self.accounts.write().unwrap();
+        match storage.entry(user_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(UserAccount::default());
+            }
+            Entry::Occupied(_entry) => warn!("Attempting to create account which already exists"),
+        };
+    }
+
+    fn add_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>> {
+        let mut storage = self.accounts.write().unwrap();
+        match storage.entry(user_id) {
+            Entry::Vacant(entry) => {
+                entry.insert(UserAccount {
+                    balance: amount,
+                    holded: Decimal::ZERO,
+                    locked: false,
+                });
+            }
+            Entry::Occupied(mut entry) => {
+                let acc = entry.get_mut();
+                if acc.locked {
+                    warn!("Trying to add money to locked account");
+                    return Err(Box::new(AccountError::AccountLocked));
+                }
+                match acc.balance.checked_add(amount) {
+                    Some(new_balance) => acc.balance = new_balance,
+                    None => {
+                        error!(
+                            "Got balance overflow for account {user_id}, need to solve this manually"
+                        );
+                        return Err(Box::new(AccountError::BalanceOverflow));
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
+
+    fn decrease_money(&self, user_id: UserId, amount: Decimal) {}
+    fn hold_money(&self, user_id: UserId, amount: Decimal) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::dec;
+
+    #[test]
+    fn test_add_money_creates_new_user_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let amount = dec!(100.50);
+
+        let result = storage.add_money(user_id, amount);
+
+        assert!(result.is_ok());
+        assert_eq!(storage.get_balance(user_id), Some(amount));
+        assert_eq!(storage.is_locked(user_id), Some(false));
+    }
+}
