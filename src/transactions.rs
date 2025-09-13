@@ -3,7 +3,7 @@ use std::error::Error;
 
 use crate::{
     errors::TransactionError,
-    storage::{self, InMemoryAccountsStorage, Storage, UserId},
+    storage::{Storage, UserId},
 };
 
 pub type TransactionId = u64;

@@ -5,7 +5,7 @@ use tracing::{error, warn};
 
 use rust_decimal::Decimal;
 
-use crate::errors::{AccountError, TransactionError};
+use crate::errors::AccountError;
 
 pub type UserId = u16;
 
@@ -17,15 +17,15 @@ pub struct UserAccount {
 
 impl UserAccount {
     pub fn total_balance(&self) -> Decimal {
-        return self.available_amount + self.held_amount;
+        self.available_amount + self.held_amount
     }
 
     pub fn available_balance(&self) -> Decimal {
-        return self.available_amount;
+        self.available_amount
     }
 
     pub fn held_balance(&self) -> Decimal {
-        return self.held_amount;
+        self.held_amount
     }
 }
 
@@ -43,11 +43,17 @@ pub trait Storage {
     fn create_user(&self, user_id: UserId);
     fn add_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
     fn withdraw_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
-    fn hold_money(&self, user_id: UserId, amount: Decimal);
+    fn hold_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
 }
 
 pub struct InMemoryAccountsStorage {
     accounts: RwLock<HashMap<UserId, UserAccount>>,
+}
+
+impl Default for InMemoryAccountsStorage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InMemoryAccountsStorage {
