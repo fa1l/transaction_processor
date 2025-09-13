@@ -125,12 +125,83 @@ mod tests {
     fn test_add_money_creates_new_user_account() {
         let storage = InMemoryAccountsStorage::new();
         let user_id = 1;
-        let amount = dec!(100.50);
-
+        let amount = dec!(100.500);
         let result = storage.add_money(user_id, amount);
 
         assert!(result.is_ok());
         assert_eq!(storage.get_balance(user_id), Some(amount));
         assert_eq!(storage.is_locked(user_id), Some(false));
+    }
+
+    #[test]
+    fn test_add_money_to_existing_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(50.25);
+        let additional_amount = dec!(25.75);
+        let expected_total = dec!(76.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        let result = storage.add_money(user_id, additional_amount);
+
+        assert!(result.is_ok());
+        assert_eq!(storage.get_balance(user_id), Some(expected_total));
+    }
+
+    #[test]
+    fn test_add_money_to_locked_account_returns_error() {
+        let mut storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let amount = dec!(100.00);
+
+        storage.add_money(user_id, amount).unwrap();
+        storage
+            .accounts
+            .get_mut()
+            .unwrap()
+            .get_mut(&user_id)
+            .unwrap()
+            .locked = true;
+
+        let result = storage.add_money(user_id, dec!(50.00));
+        assert!(result.is_err());
+
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::AccountLocked);
+        assert_eq!(storage.get_balance(user_id), Some(amount));
+    }
+
+    #[test]
+    fn test_add_money_multiple_users() {
+        let storage = InMemoryAccountsStorage::new();
+        let user1_id = 1;
+        let user2_id = 2;
+        let amount1 = dec!(100.00);
+        let amount2 = dec!(200.50);
+
+        let result1 = storage.add_money(user1_id, amount1);
+        let result2 = storage.add_money(user2_id, amount2);
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        assert_eq!(storage.get_balance(user1_id), Some(amount1));
+        assert_eq!(storage.get_balance(user2_id), Some(amount2));
+    }
+
+    #[test]
+    fn test_add_money_overflow_protection() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let max_decimal = Decimal::MAX;
+
+        storage.add_money(user_id, max_decimal).unwrap();
+        let result = storage.add_money(user_id, dec!(1.00));
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::BalanceOverflow);
+        assert_eq!(storage.get_balance(user_id), Some(max_decimal));
     }
 }
