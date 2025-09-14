@@ -267,6 +267,24 @@ mod tests {
     use rstest::rstest;
     use rust_decimal::dec;
 
+    fn create_transaction_in_history(
+        history: &InMemoryTransactionStorage,
+        transaction_id: u64,
+        client_id: u16,
+        amount: Decimal,
+        transaction_type: TransactionInfoType,
+        status: TransactionStatus,
+    ) {
+        let transaction_info = TransactionInfo {
+            client_id,
+            transaction_id,
+            amount,
+            status,
+            transaction_type,
+        };
+        history.add_transaction(transaction_info).unwrap();
+    }
+
     #[rstest]
     #[case("deposit", Some(dec!(100.00)), 1, 100)]
     #[case("withdrawal", Some(dec!(50.25)), 2, 200)]
@@ -481,5 +499,444 @@ mod tests {
         assert_eq!(*account_error, AccountError::AccountLocked);
 
         assert!(history.find_transaction(transaction_id).is_none());
+    }
+
+    #[test]
+    fn test_dispute_execute_deposit_successful() {
+        let account_storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(50.00);
+
+        account_storage.add_money(client_id, amount).unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::WithoutDisputes,
+        );
+
+        let dispute = Dispute {
+            client_id,
+            transaction_id,
+        };
+
+        assert_eq!(account_storage.get_balance(client_id), Some(amount));
+        let initial_transaction = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(
+            initial_transaction.status,
+            TransactionStatus::WithoutDisputes
+        );
+
+        let result = dispute.execute(&account_storage, &history);
+
+        assert!(result.is_ok());
+
+        let accounts = account_storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.available_balance(), Decimal::ZERO);
+        assert_eq!(account.held_balance(), amount);
+        assert_eq!(account.total_balance(), amount);
+
+        let updated_transaction = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(updated_transaction.status, TransactionStatus::Disputed);
+    }
+
+    #[test]
+    fn test_dispute_execute_withdrawal_successful() {
+        let account_storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let withdrawal_amount = dec!(30.00);
+        let initial_balance = dec!(70.00);
+
+        account_storage
+            .add_money(client_id, initial_balance)
+            .unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            withdrawal_amount,
+            TransactionInfoType::Withdrawal,
+            TransactionStatus::WithoutDisputes,
+        );
+
+        let dispute = Dispute {
+            client_id,
+            transaction_id,
+        };
+
+        assert_eq!(
+            account_storage.get_balance(client_id),
+            Some(initial_balance)
+        );
+
+        let result = dispute.execute(&account_storage, &history);
+
+        assert!(result.is_ok());
+
+        let accounts = account_storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.available_balance(), initial_balance);
+        assert_eq!(account.held_balance(), withdrawal_amount);
+        assert_eq!(account.total_balance(), initial_balance + withdrawal_amount);
+
+        let updated_transaction = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(updated_transaction.status, TransactionStatus::Disputed);
+    }
+
+    #[test]
+    fn test_dispute_execute_transaction_not_found() {
+        let account_storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let nonexistent_transaction_id = 999;
+
+        let dispute = Dispute {
+            client_id,
+            transaction_id: nonexistent_transaction_id,
+        };
+
+        let result = dispute.execute(&account_storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(
+            *transaction_error,
+            TransactionError::OriginTransactionNotFound
+        );
+    }
+
+    #[rstest]
+    #[case(TransactionStatus::Disputed)]
+    #[case(TransactionStatus::Resolved)]
+    #[case(TransactionStatus::Chargebacked)]
+    fn test_dispute_execute_already_disputed(#[case] existing_status: TransactionStatus) {
+        let account_storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(50.00);
+
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            existing_status,
+        );
+
+        let dispute = Dispute {
+            client_id,
+            transaction_id,
+        };
+
+        let result = dispute.execute(&account_storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(
+            *transaction_error,
+            TransactionError::TransactionMultipleDispute
+        );
+
+        let transaction_info = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(transaction_info.status, existing_status);
+    }
+
+    #[test]
+    fn test_dispute_execute_deposit_insufficient_funds_to_hold() {
+        let account_storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let deposit_amount = dec!(100.00);
+        let current_balance = dec!(50.00);
+
+        account_storage
+            .add_money(client_id, current_balance)
+            .unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            deposit_amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::WithoutDisputes,
+        );
+
+        let dispute = Dispute {
+            client_id,
+            transaction_id,
+        };
+
+        let result = dispute.execute(&account_storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::InsufficientMoney);
+
+        let transaction_info = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(transaction_info.status, TransactionStatus::WithoutDisputes);
+    }
+
+    #[test]
+    fn test_dispute_execute_locked_account() {
+        let account_storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(50.00);
+
+        account_storage.add_money(client_id, amount).unwrap();
+        account_storage.block_account(client_id).unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::WithoutDisputes,
+        );
+
+        let dispute = Dispute {
+            client_id,
+            transaction_id,
+        };
+
+        let result = dispute.execute(&account_storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::AccountLocked);
+    }
+
+    #[test]
+    fn test_resolve_successful_for_disputed_deposit() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100_u64;
+        let amount = dec!(50.0);
+
+        storage.create_user(client_id);
+        storage.add_money(client_id, amount).unwrap();
+        storage.hold_money(client_id, amount).unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::Disputed,
+        );
+
+        let resolve = Resolve {
+            client_id,
+            transaction_id,
+        };
+        let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_ok());
+
+        let transaction_info = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(transaction_info.status, TransactionStatus::Resolved);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.available_balance(), amount);
+        assert_eq!(account.held_balance(), dec!(0));
+    }
+
+    #[test]
+    fn test_resolve_successful_for_disputed_withdrawal() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(30.0);
+
+        storage.create_user(client_id);
+        storage.add_money(client_id, amount * dec!(2)).unwrap();
+        storage.hold_money(client_id, amount).unwrap();
+
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Withdrawal,
+            TransactionStatus::Disputed,
+        );
+        let resolve = Resolve {
+            client_id,
+            transaction_id,
+        };
+        let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_ok());
+
+        let transaction_info = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(transaction_info.status, TransactionStatus::Resolved);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.held_balance(), dec!(0));
+        assert_eq!(account.available_balance(), amount * dec!(2));
+    }
+
+    #[test]
+    fn test_resolve_transaction_not_found() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 999;
+
+        storage.create_user(client_id);
+
+        let resolve = Resolve {
+            client_id,
+            transaction_id,
+        };
+        let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(
+            *transaction_error,
+            TransactionError::OriginTransactionNotFound
+        );
+    }
+
+    #[test]
+    fn test_resolve_transaction_not_disputed() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(25.0);
+
+        storage.create_user(client_id);
+        let transaction_info = TransactionInfo {
+            client_id,
+            transaction_id,
+            amount,
+            status: TransactionStatus::WithoutDisputes,
+            transaction_type: TransactionInfoType::Deposit,
+        };
+        history.add_transaction(transaction_info).unwrap();
+
+        let resolve = Resolve {
+            client_id,
+            transaction_id,
+        };
+        let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::TransactionNotDisputed);
+    }
+
+    #[test]
+    fn test_resolve_transaction_already_resolved() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(40.0);
+
+        storage.create_user(client_id);
+        let transaction_info = TransactionInfo {
+            client_id,
+            transaction_id,
+            amount,
+            status: TransactionStatus::Resolved,
+            transaction_type: TransactionInfoType::Deposit,
+        };
+        history.add_transaction(transaction_info).unwrap();
+
+        let resolve = Resolve {
+            client_id,
+            transaction_id,
+        };
+        let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_err());
+
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::TransactionNotDisputed);
+    }
+
+    #[test]
+    fn test_resolve_transaction_chargebacked() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(60.0);
+
+        storage.create_user(client_id);
+        let transaction_info = TransactionInfo {
+            client_id,
+            transaction_id,
+            amount,
+            status: TransactionStatus::Chargebacked,
+            transaction_type: TransactionInfoType::Deposit,
+        };
+        history.add_transaction(transaction_info).unwrap();
+
+        let resolve = Resolve {
+            client_id,
+            transaction_id,
+        };
+        let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::TransactionNotDisputed);
+    }
+
+    #[test]
+    fn test_resolve_unhold_money_error_propagation() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(100.0);
+
+        storage.create_user(client_id);
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::Disputed,
+        );
+
+        let resolve = Resolve {
+            client_id,
+            transaction_id,
+        };
+        let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*transaction_error, AccountError::InsufficientMoney);
     }
 }

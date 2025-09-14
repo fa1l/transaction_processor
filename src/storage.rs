@@ -49,7 +49,7 @@ pub trait AccountStorage {
 }
 
 pub struct InMemoryAccountsStorage {
-    accounts: RwLock<HashMap<ClientId, UserAccount>>,
+    pub accounts: RwLock<HashMap<ClientId, UserAccount>>,
 }
 
 impl Default for InMemoryAccountsStorage {
