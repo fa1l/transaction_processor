@@ -27,6 +27,10 @@ impl UserAccount {
     pub fn held_balance(&self) -> Decimal {
         self.held_amount
     }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
 }
 
 impl Default for UserAccount {

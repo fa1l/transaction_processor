@@ -354,6 +354,35 @@ mod tests {
     }
 
     #[test]
+    fn test_deposit_negative_amount_error() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let negative_amount = dec!(-50.0);
+
+        storage.create_user(client_id);
+
+        let deposit = Deposit {
+            client_id,
+            transaction_id,
+            amount: negative_amount,
+        };
+        let result = deposit.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::NegativeAmount);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.available_balance(), dec!(0));
+
+        assert!(history.find_transaction(transaction_id).is_none());
+    }
+
+    #[test]
     fn test_deposit_execute_locked_account() {
         let account_storage = InMemoryAccountsStorage::new();
         let history = InMemoryTransactionStorage::new();
@@ -421,13 +450,43 @@ mod tests {
     }
 
     #[test]
+    fn test_withdrawal_negative_amount_error() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let negative_amount = dec!(-30.0);
+
+        storage.create_user(client_id);
+        storage.add_money(client_id, dec!(100.0)).unwrap();
+
+        let withdrawal = Withdrawal {
+            client_id,
+            transaction_id,
+            amount: negative_amount,
+        };
+        let result = withdrawal.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::NegativeAmount);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.available_balance(), dec!(100.0));
+
+        assert!(history.find_transaction(transaction_id).is_none());
+    }
+
+    #[test]
     fn test_withdrawal_execute_insufficient_funds() {
         let account_storage = InMemoryAccountsStorage::new();
         let history = InMemoryTransactionStorage::new();
         let client_id = 1;
         let transaction_id = 100;
         let initial_amount = dec!(50.00);
-        let withdrawal_amount = dec!(100.00); // Больше чем есть
+        let withdrawal_amount = dec!(100.00);
 
         account_storage
             .add_money(client_id, initial_amount)
@@ -454,7 +513,7 @@ mod tests {
     fn test_withdrawal_execute_nonexistent_account() {
         let account_storage = InMemoryAccountsStorage::new();
         let history = InMemoryTransactionStorage::new();
-        let client_id = 999; // Несуществующий аккаунт
+        let client_id = 999;
         let transaction_id = 100;
         let amount = dec!(50.00);
 
@@ -933,6 +992,259 @@ mod tests {
             transaction_id,
         };
         let result = resolve.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*transaction_error, AccountError::InsufficientMoney);
+    }
+
+    #[test]
+    fn test_chargeback_successful_for_disputed_deposit() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(50.0);
+
+        storage.create_user(client_id);
+        storage.add_money(client_id, amount * dec!(2)).unwrap();
+        storage.hold_money(client_id, amount).unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::Disputed,
+        );
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
+
+        assert!(result.is_ok());
+
+        let transaction_info = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(transaction_info.status, TransactionStatus::Chargebacked);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.held_balance(), dec!(0));
+        assert_eq!(account.available_balance(), amount);
+        assert!(account.is_locked());
+    }
+
+    #[test]
+    fn test_chargeback_successful_for_disputed_withdrawal() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(30.0);
+
+        storage.create_user(client_id);
+        storage.add_money(client_id, amount * dec!(3)).unwrap();
+        storage.hold_money(client_id, amount).unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Withdrawal,
+            TransactionStatus::Disputed,
+        );
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
+
+        assert!(result.is_ok());
+
+        let transaction_info = history.find_transaction(transaction_id).unwrap();
+        assert_eq!(transaction_info.status, TransactionStatus::Chargebacked);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&client_id).unwrap();
+        assert_eq!(account.held_balance(), dec!(0));
+        assert_eq!(account.available_balance(), amount * dec!(2));
+        assert!(account.is_locked());
+    }
+
+    #[test]
+    fn test_chargeback_transaction_not_found() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 999;
+
+        storage.create_user(client_id);
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(
+            *transaction_error,
+            TransactionError::OriginTransactionNotFound
+        );
+    }
+
+    #[test]
+    fn test_chargeback_transaction_not_disputed() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(25.0);
+
+        storage.create_user(client_id);
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::WithoutDisputes,
+        );
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::TransactionNotDisputed);
+    }
+
+    #[test]
+    fn test_chargeback_transaction_already_resolved() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(40.0);
+
+        storage.create_user(client_id);
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::Resolved,
+        );
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::TransactionNotDisputed);
+    }
+
+    #[test]
+    fn test_chargeback_transaction_already_chargebacked() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(60.0);
+
+        storage.create_user(client_id);
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::Chargebacked,
+        );
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<TransactionError>().unwrap();
+        assert_eq!(*transaction_error, TransactionError::TransactionNotDisputed);
+    }
+
+    #[test]
+    fn test_chargeback_unhold_money_error_propagation() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(100.0);
+
+        storage.create_user(client_id);
+        storage.add_money(client_id, amount).unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::Disputed,
+        );
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let transaction_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*transaction_error, AccountError::InsufficientMoney);
+    }
+
+    #[test]
+    fn test_chargeback_withdraw_money_error_propagation() {
+        let storage = InMemoryAccountsStorage::new();
+        let history = InMemoryTransactionStorage::new();
+        let client_id = 1;
+        let transaction_id = 100;
+        let amount = dec!(100.0);
+
+        storage.create_user(client_id);
+        storage.add_money(client_id, amount / dec!(2)).unwrap();
+        storage.hold_money(client_id, amount / dec!(2)).unwrap();
+        create_transaction_in_history(
+            &history,
+            transaction_id,
+            client_id,
+            amount,
+            TransactionInfoType::Deposit,
+            TransactionStatus::Disputed,
+        );
+
+        let chargeback = Chargeback {
+            client_id,
+            transaction_id,
+        };
+        let result = chargeback.execute(&storage, &history);
 
         assert!(result.is_err());
         let error = result.unwrap_err();
