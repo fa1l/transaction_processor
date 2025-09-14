@@ -7,7 +7,7 @@ use rust_decimal::Decimal;
 
 use crate::errors::AccountError;
 
-pub type UserId = u16;
+pub type ClientId = u16;
 
 pub struct UserAccount {
     available_amount: Decimal,
@@ -39,15 +39,15 @@ impl Default for UserAccount {
     }
 }
 
-pub trait Storage {
-    fn create_user(&self, user_id: UserId);
-    fn add_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
-    fn withdraw_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
-    fn hold_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>>;
+pub trait AccountStorage {
+    fn create_user(&self, user_id: ClientId);
+    fn add_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>>;
+    fn withdraw_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>>;
+    fn hold_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>>;
 }
 
 pub struct InMemoryAccountsStorage {
-    accounts: RwLock<HashMap<UserId, UserAccount>>,
+    accounts: RwLock<HashMap<ClientId, UserAccount>>,
 }
 
 impl Default for InMemoryAccountsStorage {
@@ -63,7 +63,7 @@ impl InMemoryAccountsStorage {
         }
     }
 
-    pub fn is_locked(&self, user_id: UserId) -> Option<bool> {
+    pub fn is_locked(&self, user_id: ClientId) -> Option<bool> {
         let storage = self.accounts.read().unwrap();
         match storage.get(&user_id) {
             Some(account) => Some(account.locked),
@@ -74,7 +74,7 @@ impl InMemoryAccountsStorage {
         }
     }
 
-    pub fn get_balance(&self, user_id: UserId) -> Option<Decimal> {
+    pub fn get_balance(&self, user_id: ClientId) -> Option<Decimal> {
         let storage = self.accounts.read().unwrap();
         match storage.get(&user_id) {
             Some(account) => {
@@ -91,8 +91,8 @@ impl InMemoryAccountsStorage {
     }
 }
 
-impl Storage for InMemoryAccountsStorage {
-    fn create_user(&self, user_id: UserId) {
+impl AccountStorage for InMemoryAccountsStorage {
+    fn create_user(&self, user_id: ClientId) {
         let mut storage = self.accounts.write().unwrap();
         match storage.entry(user_id) {
             Entry::Vacant(entry) => {
@@ -102,7 +102,7 @@ impl Storage for InMemoryAccountsStorage {
         };
     }
 
-    fn add_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>> {
+    fn add_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>> {
         let mut storage = self.accounts.write().unwrap();
         match storage.entry(user_id) {
             Entry::Vacant(entry) => {
@@ -132,7 +132,7 @@ impl Storage for InMemoryAccountsStorage {
         Ok(())
     }
 
-    fn withdraw_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>> {
+    fn withdraw_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>> {
         let mut storage = self.accounts.write().unwrap();
         match storage.entry(user_id) {
             Entry::Vacant(_entry) => {
@@ -164,7 +164,7 @@ impl Storage for InMemoryAccountsStorage {
         Ok(())
     }
 
-    fn hold_money(&self, user_id: UserId, amount: Decimal) -> Result<(), Box<dyn Error>> {
+    fn hold_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>> {
         let mut storage = self.accounts.write().unwrap();
         match storage.entry(user_id) {
             Entry::Vacant(_entry) => {
