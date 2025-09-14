@@ -45,3 +45,46 @@ impl fmt::Display for TransactionError {
 }
 
 impl std::error::Error for TransactionError {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransactionLogError {
+    InvalidTransactionType,
+    MissingAmount,
+}
+
+impl fmt::Display for TransactionLogError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TransactionLogError::InvalidTransactionType => {
+                write!(f, "Invalid transaction type in entry")
+            }
+            TransactionLogError::MissingAmount => write!(f, "Missing amount in entry"),
+        }
+    }
+}
+
+impl std::error::Error for TransactionLogError {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransactionHistoryError {
+    TransactionAlreadyExists,
+    UnknownTransaction,
+    InvalidStatusTransition,
+}
+
+impl fmt::Display for TransactionHistoryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TransactionHistoryError::TransactionAlreadyExists => write!(
+                f,
+                "Trying to add transaction that already exists in history"
+            ),
+            TransactionHistoryError::UnknownTransaction => write!(f, "Unkown transaction ID"),
+            TransactionHistoryError::InvalidStatusTransition => {
+                write!(f, "Can't complete transaction status update")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TransactionHistoryError {}
