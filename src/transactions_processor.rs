@@ -168,4 +168,60 @@ mod tests {
         let transaction_info = processor.history.find_transaction(transaction_id).unwrap();
         assert_eq!(transaction_info.status, expected_status);
     }
+
+    #[rstest]
+    #[case(
+        TransactionStatus::WithoutDisputes,
+        TransactionStatus::WithoutDisputes,
+        false
+    )]
+    #[case(TransactionStatus::WithoutDisputes, TransactionStatus::Disputed, true)]
+    #[case(TransactionStatus::WithoutDisputes, TransactionStatus::Resolved, false)]
+    #[case(
+        TransactionStatus::WithoutDisputes,
+        TransactionStatus::Chargebacked,
+        false
+    )]
+    #[case(TransactionStatus::Disputed, TransactionStatus::WithoutDisputes, false)]
+    #[case(TransactionStatus::Disputed, TransactionStatus::Disputed, false)]
+    #[case(TransactionStatus::Disputed, TransactionStatus::Resolved, true)]
+    #[case(TransactionStatus::Disputed, TransactionStatus::Chargebacked, true)]
+    #[case(TransactionStatus::Resolved, TransactionStatus::WithoutDisputes, false)]
+    #[case(TransactionStatus::Resolved, TransactionStatus::Disputed, false)]
+    #[case(TransactionStatus::Resolved, TransactionStatus::Resolved, false)]
+    #[case(TransactionStatus::Resolved, TransactionStatus::Chargebacked, false)]
+    #[case(
+        TransactionStatus::Chargebacked,
+        TransactionStatus::WithoutDisputes,
+        false
+    )]
+    #[case(TransactionStatus::Chargebacked, TransactionStatus::Disputed, false)]
+    #[case(TransactionStatus::Chargebacked, TransactionStatus::Resolved, false)]
+    #[case(
+        TransactionStatus::Chargebacked,
+        TransactionStatus::Chargebacked,
+        false
+    )]
+    fn test_status_transitions(
+        #[case] from: TransactionStatus,
+        #[case] to: TransactionStatus,
+        #[case] should_be_valid: bool,
+    ) {
+        assert_eq!(from.is_transition_available(&to), should_be_valid);
+
+        let result = from.make_transition(to);
+
+        if should_be_valid {
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), to);
+        } else {
+            assert!(result.is_err());
+            let error = result.unwrap_err();
+            let history_error = error.downcast_ref::<TransactionHistoryError>().unwrap();
+            assert_eq!(
+                *history_error,
+                TransactionHistoryError::InvalidStatusTransition
+            );
+        }
+    }
 }
