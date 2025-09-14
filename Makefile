@@ -12,7 +12,7 @@ lint:
 	cargo check --all-targets --all-features
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo audit
-	typos check .
+	typos .
 
 plint:	pretty lint
 
