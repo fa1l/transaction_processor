@@ -44,6 +44,8 @@ pub trait AccountStorage {
     fn add_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>>;
     fn withdraw_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>>;
     fn hold_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>>;
+    fn unhold_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>>;
+    fn block_account(&self, user_id: ClientId) -> Result<(), Box<dyn Error>>;
 }
 
 pub struct InMemoryAccountsStorage {
@@ -203,6 +205,67 @@ impl AccountStorage for InMemoryAccountsStorage {
                 };
             }
         }
+        Ok(())
+    }
+
+    fn unhold_money(&self, user_id: ClientId, amount: Decimal) -> Result<(), Box<dyn Error>> {
+        let mut storage = self.accounts.write().unwrap();
+        match storage.entry(user_id) {
+            Entry::Vacant(_entry) => {
+                warn!("Trying to unhold money from unknown account");
+                return Err(Box::new(AccountError::AccountNotFound));
+            }
+            Entry::Occupied(mut entry) => {
+                let account = entry.get_mut();
+                if account.locked {
+                    warn!("Trying to unhold money from locked account");
+                    return Err(Box::new(AccountError::AccountLocked));
+                }
+                if account.held_amount < amount {
+                    warn!("Trying to unhold more money then account has");
+                    return Err(Box::new(AccountError::InsufficientMoney));
+                }
+                match account.held_amount.checked_sub(amount) {
+                    Some(new_balance) => account.held_amount = new_balance,
+                    None => {
+                        // kind of impossible, but let it be
+                        error!(
+                            "Got balance overflow for account {user_id}, need to solve this manually"
+                        );
+                        return Err(Box::new(AccountError::BalanceOverflow));
+                    }
+                };
+                match account.available_amount.checked_add(amount) {
+                    Some(new_balance) => account.available_amount = new_balance,
+                    None => {
+                        // kind of impossible, but let it be
+                        error!(
+                            "Got balance overflow for account {user_id}, need to solve this manually"
+                        );
+                        return Err(Box::new(AccountError::BalanceOverflow));
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
+
+    fn block_account(&self, user_id: ClientId) -> Result<(), Box<dyn Error>> {
+        let mut storage = self.accounts.write().unwrap();
+        match storage.entry(user_id) {
+            Entry::Vacant(_entry) => {
+                warn!("Trying to block unknown account");
+                return Err(Box::new(AccountError::AccountNotFound));
+            }
+            Entry::Occupied(mut entry) => {
+                let account = entry.get_mut();
+                if account.locked {
+                    warn!("Trying to block already locked account");
+                    return Ok(());
+                }
+                account.locked = true;
+            }
+        };
         Ok(())
     }
 }
