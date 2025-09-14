@@ -1,6 +1,8 @@
+COVERAGE ?= 90
+
 init:
 	rustup component add clippy
-	cargo install cargo-audit typos-cli
+	cargo install cargo-audit typos-cli cargo-tarpaulin
 
 pretty:
 	cargo fmt
@@ -13,3 +15,9 @@ lint:
 	typos check .
 
 plint:	pretty lint
+
+tests: 
+	cargo tarpaulin --fail-under $(COVERAGE)
+
+codecov:
+	cargo tarpaulin --out Html
