@@ -1,6 +1,7 @@
 use enum_dispatch::enum_dispatch;
 use rust_decimal::Decimal;
 use std::error::Error;
+use tracing::warn;
 
 const DEPOSIT_VALUE: &str = "deposit";
 const WITHDRAWAL_VALUE: &str = "withdrawal";
@@ -12,7 +13,7 @@ use crate::{
     errors::{TransactionError, TransactionLogError},
     history::TransactionHistoryStorage,
     storage::{AccountStorage, ClientId},
-    transactions_processor::TransactionLogEntry,
+    transactions_processor::{TransactionLogEntry, TransactionStatus},
 };
 
 pub type TransactionId = u64;
@@ -78,7 +79,19 @@ impl TryFrom<&TransactionLogEntry> for Transaction {
                     amount,
                 }))
             }
-            _ => panic!("not yet"),
+            DISPUTE_VALUE => Ok(Transaction::Dispute(Dispute {
+                client_id: *client_id,
+                transaction_id: *transaction_id,
+            })),
+            RESOLVE_VALUE => Ok(Transaction::Resolve(Resolve {
+                client_id: *client_id,
+                transaction_id: *transaction_id,
+            })),
+            CHARGEBACK_VALUE => Ok(Transaction::Chargeback(Chargeback {
+                client_id: *client_id,
+                transaction_id: *transaction_id,
+            })),
+            _ => Err(TransactionLogError::InvalidTransactionType),
         }
     }
 }
@@ -94,7 +107,7 @@ impl ExecTransaction for Deposit {
     fn execute(
         &self,
         account_storage: &impl AccountStorage,
-        history: &impl TransactionHistoryStorage,
+        _history: &impl TransactionHistoryStorage,
     ) -> Result<(), Box<dyn Error>> {
         if self.amount.is_sign_negative() {
             return Err(Box::new(TransactionError::NegativeAmount));
@@ -114,7 +127,7 @@ impl ExecTransaction for Withdrawal {
     fn execute(
         &self,
         account_storage: &impl AccountStorage,
-        history: &impl TransactionHistoryStorage,
+        _history: &impl TransactionHistoryStorage,
     ) -> Result<(), Box<dyn Error>> {
         if self.amount.is_sign_negative() {
             return Err(Box::new(TransactionError::NegativeAmount));
@@ -135,6 +148,20 @@ impl ExecTransaction for Dispute {
         account_storage: &impl AccountStorage,
         history: &impl TransactionHistoryStorage,
     ) -> Result<(), Box<dyn Error>> {
+        let transaction_info = match history.find_transaction(self.transaction_id) {
+            Some(transaction) => transaction,
+            None => {
+                warn!("Can't find transaction for dispute");
+                return Err(Box::new(TransactionError::OriginTransactionNotFound));
+            }
+        };
+        if !matches!(transaction_info.status, TransactionStatus::WithoutDisputes) {
+            warn!("Original transaction already have been disputed");
+            return Err(Box::new(TransactionError::TransactionMultipleDispute));
+        }
+        history.update_transaction_status(self.transaction_id, TransactionStatus::Disputed)?;
+        account_storage.hold_money(self.client_id, transaction_info.amount.unwrap())?;
+        //TODO: maybe account should be blocked if it hasn't got enough money to be held
         Ok(())
     }
 }
@@ -151,6 +178,23 @@ impl ExecTransaction for Resolve {
         account_storage: &impl AccountStorage,
         history: &impl TransactionHistoryStorage,
     ) -> Result<(), Box<dyn Error>> {
+        let transaction_info = match history.find_transaction(self.transaction_id) {
+            Some(transaction) => transaction,
+            None => {
+                warn!("Can't find transaction for resolve");
+                return Err(Box::new(TransactionError::OriginTransactionNotFound));
+            }
+        };
+        if !matches!(transaction_info.status, TransactionStatus::Disputed) {
+            warn!("Original transaction not in disputed state");
+            return Err(Box::new(TransactionError::TransactionNotDisputed));
+        }
+        let origin_amount = match transaction_info.amount {
+            Some(amount) => amount,
+            None => return Err(Box::new(TransactionError::EmptyAmount)),
+        };
+        history.update_transaction_status(self.transaction_id, TransactionStatus::Resolved)?;
+        account_storage.unhold_money(self.client_id, origin_amount)?;
         Ok(())
     }
 }
@@ -167,6 +211,26 @@ impl ExecTransaction for Chargeback {
         account_storage: &impl AccountStorage,
         history: &impl TransactionHistoryStorage,
     ) -> Result<(), Box<dyn Error>> {
+        let transaction_info = match history.find_transaction(self.transaction_id) {
+            Some(transaction) => transaction,
+            None => {
+                warn!("Can't find transaction for chargeback");
+                return Err(Box::new(TransactionError::OriginTransactionNotFound));
+            }
+        };
+        if !matches!(transaction_info.status, TransactionStatus::Disputed) {
+            warn!("Original transaction not in disputed state");
+            return Err(Box::new(TransactionError::TransactionNotDisputed));
+        }
+        let origin_amount = match transaction_info.amount {
+            Some(amount) => amount,
+            None => return Err(Box::new(TransactionError::EmptyAmount)),
+        };
+        history.update_transaction_status(self.transaction_id, TransactionStatus::Chargebacked)?;
+        // TODO: maybe I need to make unhold + withdraw as a one method
+        account_storage.unhold_money(self.client_id, origin_amount)?;
+        account_storage.withdraw_money(self.client_id, origin_amount)?;
+        account_storage.block_account(self.client_id)?;
         Ok(())
     }
 }
