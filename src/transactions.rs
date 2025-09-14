@@ -13,7 +13,9 @@ use crate::{
     errors::{TransactionError, TransactionLogError},
     history::TransactionHistoryStorage,
     storage::{AccountStorage, ClientId},
-    transactions_processor::{TransactionLogEntry, TransactionStatus},
+    transactions_processor::{
+        TransactionInfo, TransactionInfoType, TransactionLogEntry, TransactionStatus,
+    },
 };
 
 pub type TransactionId = u64;
@@ -107,12 +109,21 @@ impl ExecTransaction for Deposit {
     fn execute(
         &self,
         account_storage: &impl AccountStorage,
-        _history: &impl TransactionHistoryStorage,
+        history: &impl TransactionHistoryStorage,
     ) -> Result<(), Box<dyn Error>> {
         if self.amount.is_sign_negative() {
             return Err(Box::new(TransactionError::NegativeAmount));
         }
-        account_storage.add_money(self.client_id, self.amount)
+        account_storage.add_money(self.client_id, self.amount)?;
+        let transaction_info = TransactionInfo {
+            client_id: self.client_id,
+            transaction_id: self.transaction_id,
+            amount: self.amount,
+            status: TransactionStatus::WithoutDisputes,
+            transaction_type: TransactionInfoType::Deposit,
+        };
+        history.add_transaction(transaction_info)?;
+        Ok(())
     }
 }
 
@@ -127,12 +138,21 @@ impl ExecTransaction for Withdrawal {
     fn execute(
         &self,
         account_storage: &impl AccountStorage,
-        _history: &impl TransactionHistoryStorage,
+        history: &impl TransactionHistoryStorage,
     ) -> Result<(), Box<dyn Error>> {
         if self.amount.is_sign_negative() {
             return Err(Box::new(TransactionError::NegativeAmount));
         }
-        account_storage.withdraw_money(self.client_id, self.amount)
+        account_storage.withdraw_money(self.client_id, self.amount)?;
+        let transaction_info = TransactionInfo {
+            client_id: self.client_id,
+            transaction_id: self.transaction_id,
+            amount: self.amount,
+            status: TransactionStatus::WithoutDisputes,
+            transaction_type: TransactionInfoType::Withdrawal,
+        };
+        history.add_transaction(transaction_info)?;
+        Ok(())
     }
 }
 
@@ -159,9 +179,17 @@ impl ExecTransaction for Dispute {
             warn!("Original transaction already have been disputed");
             return Err(Box::new(TransactionError::TransactionMultipleDispute));
         }
+        match transaction_info.transaction_type {
+            TransactionInfoType::Deposit => {
+                //TODO: maybe account should be blocked if it hasn't got enough money to be held
+                account_storage.hold_money(self.client_id, transaction_info.amount)?;
+            }
+            TransactionInfoType::Withdrawal => {
+                account_storage.add_money(self.client_id, transaction_info.amount)?;
+                account_storage.hold_money(self.client_id, transaction_info.amount)?;
+            }
+        };
         history.update_transaction_status(self.transaction_id, TransactionStatus::Disputed)?;
-        account_storage.hold_money(self.client_id, transaction_info.amount.unwrap())?;
-        //TODO: maybe account should be blocked if it hasn't got enough money to be held
         Ok(())
     }
 }
@@ -189,12 +217,8 @@ impl ExecTransaction for Resolve {
             warn!("Original transaction not in disputed state");
             return Err(Box::new(TransactionError::TransactionNotDisputed));
         }
-        let origin_amount = match transaction_info.amount {
-            Some(amount) => amount,
-            None => return Err(Box::new(TransactionError::EmptyAmount)),
-        };
         history.update_transaction_status(self.transaction_id, TransactionStatus::Resolved)?;
-        account_storage.unhold_money(self.client_id, origin_amount)?;
+        account_storage.unhold_money(self.client_id, transaction_info.amount)?;
         Ok(())
     }
 }
@@ -222,14 +246,10 @@ impl ExecTransaction for Chargeback {
             warn!("Original transaction not in disputed state");
             return Err(Box::new(TransactionError::TransactionNotDisputed));
         }
-        let origin_amount = match transaction_info.amount {
-            Some(amount) => amount,
-            None => return Err(Box::new(TransactionError::EmptyAmount)),
-        };
         history.update_transaction_status(self.transaction_id, TransactionStatus::Chargebacked)?;
         // TODO: maybe I need to make unhold + withdraw as a one method
-        account_storage.unhold_money(self.client_id, origin_amount)?;
-        account_storage.withdraw_money(self.client_id, origin_amount)?;
+        account_storage.unhold_money(self.client_id, transaction_info.amount)?;
+        account_storage.withdraw_money(self.client_id, transaction_info.amount)?;
         account_storage.block_account(self.client_id)?;
         Ok(())
     }

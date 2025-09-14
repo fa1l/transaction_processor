@@ -26,6 +26,20 @@ pub struct InMemoryTransactionStorage {
     storage: RwLock<HashMap<TransactionId, TransactionInfo>>,
 }
 
+impl Default for InMemoryTransactionStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InMemoryTransactionStorage {
+    pub fn new() -> Self {
+        Self {
+            storage: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
 impl TransactionHistoryStorage for InMemoryTransactionStorage {
     fn add_transaction(&self, transaction_info: TransactionInfo) -> Result<(), Box<dyn Error>> {
         let mut storage = self.storage.write().unwrap();
