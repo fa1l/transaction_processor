@@ -1,4 +1,4 @@
-COVERAGE ?= 75
+COVERAGE ?= 85
 
 init:
 	rustup component add clippy
@@ -17,7 +17,7 @@ lint:
 plint:	pretty lint
 
 tests: 
-	cargo tarpaulin --fail-under $(COVERAGE)
+	cargo tarpaulin --fail-under $(COVERAGE) --exclude-files src/errors.rs
 
 codecov:
-	cargo tarpaulin --out Html
+	cargo tarpaulin --out Html --exclude-files src/errors.rs
