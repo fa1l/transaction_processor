@@ -133,6 +133,42 @@ make tests
 make codecov
 ```
 
+## Integration Testing
+
+The project includes a comprehensive integration test file `test_transactions.csv` that can be used to verify the correctness of the transaction processing system.
+
+### Running Integration Tests
+
+```bash
+# Run the test file and output results
+cargo run -- test_transactions.csv > test_results.csv
+```
+
+### Test File Contents
+
+The `test_transactions.csv` file contains various transaction scenarios including:
+
+- **Basic Operations**: Deposits and withdrawals with various amounts
+- **Error Cases**: Negative amounts, insufficient funds
+- **Dispute Workflows**: Multiple disputes, resolves, and chargebacks
+- **Edge Cases**: Very small amounts, boundary conditions
+- **Invalid Operations**: Non-existent transactions, blocked account operations
+
+### Expected Test Results
+
+When processing `test_transactions.csv`, the system should produce the following account states:
+
+```csv
+client,available,held,total,locked
+1,175,0,175,false
+2,40,0,40,false
+3,150,0,150,true
+4,300,0,300,false
+5,800,200.0,1000,false
+6,0.005,0,0.005,false
+7,25.5,0,25.5,false
+```
+
 ## Code Quality & Linting
 
 The project maintains high code quality standards through comprehensive automated checks:
