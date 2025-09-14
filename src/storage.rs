@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(account.available_balance(), Decimal::ZERO);
         assert_eq!(account.held_balance(), Decimal::ZERO);
         assert_eq!(account.total_balance(), Decimal::ZERO);
-        assert_eq!(account.locked, false);
+        assert!(!account.locked);
     }
 
     #[test]

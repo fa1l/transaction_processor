@@ -259,7 +259,7 @@ impl ExecTransaction for Chargeback {
 mod tests {
     use super::*;
     use crate::{
-        errors::{AccountError, TransactionError, TransactionHistoryError},
+        errors::{AccountError, TransactionError},
         history::{InMemoryTransactionStorage, TransactionHistoryStorage},
         storage::{AccountStorage, InMemoryAccountsStorage},
         transactions_processor::{TransactionInfo, TransactionInfoType, TransactionStatus},

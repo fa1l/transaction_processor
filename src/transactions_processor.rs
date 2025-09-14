@@ -85,6 +85,16 @@ impl InMemoryTransactionProcessor {
             history: InMemoryTransactionStorage::new(),
         }
     }
+
+    pub fn get_accounts_storage(&self) -> &InMemoryAccountsStorage {
+        &self.storage
+    }
+}
+
+impl Default for InMemoryTransactionProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TransactionProcessor for InMemoryTransactionProcessor {
@@ -151,7 +161,7 @@ mod tests {
             transaction_id: 1,
             amount: Some(dec!(100)),
         };
-        let result = processor.process(deposit_entry);
+        let _result = processor.process(deposit_entry);
 
         if need_dispute {
             let dispute_entry = TransactionLogEntry {
@@ -160,11 +170,11 @@ mod tests {
                 transaction_id: 1,
                 amount: None,
             };
-            let result = processor.process(dispute_entry);
+            let _result = processor.process(dispute_entry);
         }
 
         let transaction_id = transaction_log.transaction_id;
-        let result = processor.process(transaction_log);
+        let _results = processor.process(transaction_log);
         let transaction_info = processor.history.find_transaction(transaction_id).unwrap();
         assert_eq!(transaction_info.status, expected_status);
     }

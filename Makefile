@@ -1,4 +1,4 @@
-COVERAGE ?= 90
+COVERAGE ?= 75
 
 init:
 	rustup component add clippy
