@@ -274,10 +274,46 @@ impl AccountStorage for InMemoryAccountsStorage {
 mod tests {
     use super::*;
     use rust_decimal::dec;
+    #[test]
+    fn test_create_user_successful() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+
+        assert_eq!(storage.get_balance(user_id), None);
+        assert_eq!(storage.is_locked(user_id), None);
+
+        storage.create_user(user_id);
+
+        assert_eq!(storage.get_balance(user_id), Some(Decimal::ZERO));
+        assert_eq!(storage.is_locked(user_id), Some(false));
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&user_id).unwrap();
+        assert_eq!(account.available_balance(), Decimal::ZERO);
+        assert_eq!(account.held_balance(), Decimal::ZERO);
+        assert_eq!(account.total_balance(), Decimal::ZERO);
+        assert_eq!(account.locked, false);
+    }
+
+    #[test]
+    fn test_create_user_duplicate_does_not_error() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+
+        storage.create_user(user_id);
+
+        let initial_balance = storage.get_balance(user_id);
+        let initial_locked = storage.is_locked(user_id);
+
+        storage.create_user(user_id);
+
+        assert_eq!(storage.get_balance(user_id), initial_balance);
+        assert_eq!(storage.is_locked(user_id), initial_locked);
+    }
 
     #[test]
     fn test_add_money_creates_new_user_account() {
-        let storage = InMemoryAccountsStorage::new();
+        let storage = InMemoryAccountsStorage::default();
         let user_id = 1;
         let amount = dec!(100.500);
         let result = storage.add_money(user_id, amount);

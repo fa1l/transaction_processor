@@ -77,3 +77,74 @@ impl TransactionHistoryStorage for InMemoryTransactionStorage {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transactions_processor::{TransactionInfo, TransactionInfoType, TransactionStatus};
+    use rust_decimal::dec;
+
+    #[test]
+    fn test_add_transaction_successful() {
+        let storage = InMemoryTransactionStorage::new();
+        let transaction_info = TransactionInfo {
+            client_id: 1,
+            transaction_id: 100,
+            amount: dec!(50.00),
+            transaction_type: TransactionInfoType::Deposit,
+            status: TransactionStatus::WithoutDisputes,
+        };
+
+        let result = storage.add_transaction(transaction_info.clone());
+
+        assert!(result.is_ok());
+
+        let stored_transaction = storage.find_transaction(100).unwrap();
+        assert_eq!(stored_transaction.client_id, transaction_info.client_id);
+        assert_eq!(
+            stored_transaction.transaction_id,
+            transaction_info.transaction_id
+        );
+        assert_eq!(stored_transaction.amount, transaction_info.amount);
+        assert_eq!(stored_transaction.status, transaction_info.status);
+    }
+
+    #[test]
+    fn test_add_transaction_duplicate_id_error() {
+        let storage = InMemoryTransactionStorage::new();
+        let transaction_id = 100;
+
+        let first_transaction = TransactionInfo {
+            client_id: 1,
+            transaction_id,
+            amount: dec!(50.00),
+            transaction_type: TransactionInfoType::Deposit,
+            status: TransactionStatus::WithoutDisputes,
+        };
+
+        let second_transaction = TransactionInfo {
+            client_id: 2,
+            transaction_id,
+            amount: dec!(75.00),
+            transaction_type: TransactionInfoType::Deposit,
+            status: TransactionStatus::Disputed,
+        };
+
+        let result1 = storage.add_transaction(first_transaction.clone());
+        assert!(result1.is_ok());
+
+        let result2 = storage.add_transaction(second_transaction);
+        assert!(result2.is_err());
+
+        let error = result2.unwrap_err();
+        let history_error = error.downcast_ref::<TransactionHistoryError>().unwrap();
+        assert_eq!(
+            *history_error,
+            TransactionHistoryError::TransactionAlreadyExists
+        );
+
+        let stored_transaction = storage.find_transaction(transaction_id).unwrap();
+        assert_eq!(stored_transaction.client_id, first_transaction.client_id);
+        assert_eq!(stored_transaction.amount, first_transaction.amount);
+    }
+}
