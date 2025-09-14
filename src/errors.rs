@@ -26,7 +26,8 @@ pub enum TransactionError {
     NegativeAmount,
     OriginTransactionNotFound,
     TransactionNotDisputed,
-    MultipleTransactionDispute,
+    TransactionMultipleDispute,
+    EmptyAmount,
 }
 
 impl fmt::Display for TransactionError {
@@ -37,8 +38,11 @@ impl fmt::Display for TransactionError {
                 write!(f, "Origin transaction not found")
             }
             TransactionError::TransactionNotDisputed => write!(f, "Transaction not disputed"),
-            TransactionError::MultipleTransactionDispute => {
+            TransactionError::TransactionMultipleDispute => {
                 write!(f, "Multiple transaction dispute")
+            }
+            TransactionError::EmptyAmount => {
+                write!(f, "Transaction goes with empty amount but it shouldn't")
             }
         }
     }
@@ -79,7 +83,7 @@ impl fmt::Display for TransactionHistoryError {
                 f,
                 "Trying to add transaction that already exists in history"
             ),
-            TransactionHistoryError::UnknownTransaction => write!(f, "Unkown transaction ID"),
+            TransactionHistoryError::UnknownTransaction => write!(f, "Unknown transaction ID"),
             TransactionHistoryError::InvalidStatusTransition => {
                 write!(f, "Can't complete transaction status update")
             }
