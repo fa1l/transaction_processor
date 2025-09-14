@@ -509,4 +509,194 @@ mod tests {
         assert_eq!(account.held_balance(), Decimal::ZERO);
         assert_eq!(account.total_balance(), initial_amount);
     }
+
+    #[test]
+    fn test_unhold_money_successful() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+        let hold_amount = dec!(30.00);
+        let unhold_amount = dec!(20.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        storage.hold_money(user_id, hold_amount).unwrap();
+
+        let result = storage.unhold_money(user_id, unhold_amount);
+
+        assert!(result.is_ok());
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&user_id).unwrap();
+        assert_eq!(account.available_balance(), dec!(90.00)); // 70 + 20
+        assert_eq!(account.held_balance(), dec!(10.00)); // 30 - 20
+        assert_eq!(account.total_balance(), initial_amount);
+    }
+
+    #[test]
+    fn test_unhold_money_from_nonexistent_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 999;
+        let unhold_amount = dec!(50.00);
+
+        let result = storage.unhold_money(user_id, unhold_amount);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::AccountNotFound);
+    }
+
+    #[test]
+    fn test_unhold_money_from_locked_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+        let hold_amount = dec!(30.00);
+        let unhold_amount = dec!(20.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        storage.hold_money(user_id, hold_amount).unwrap();
+
+        {
+            let mut accounts = storage.accounts.write().unwrap();
+            accounts.get_mut(&user_id).unwrap().locked = true;
+        }
+
+        let result = storage.unhold_money(user_id, unhold_amount);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::AccountLocked);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&user_id).unwrap();
+        assert_eq!(account.available_balance(), dec!(70.00));
+        assert_eq!(account.held_balance(), dec!(30.00));
+    }
+
+    #[test]
+    fn test_unhold_money_insufficient_held_funds() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+        let hold_amount = dec!(30.00);
+        let unhold_amount = dec!(50.00); // Больше чем заблокировано
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        storage.hold_money(user_id, hold_amount).unwrap();
+
+        let result = storage.unhold_money(user_id, unhold_amount);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::InsufficientMoney);
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&user_id).unwrap();
+        assert_eq!(account.available_balance(), dec!(70.00));
+        assert_eq!(account.held_balance(), dec!(30.00));
+    }
+
+    #[test]
+    fn test_unhold_exact_held_amount() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+        let hold_amount = dec!(30.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        storage.hold_money(user_id, hold_amount).unwrap();
+
+        let result = storage.unhold_money(user_id, hold_amount);
+
+        assert!(result.is_ok());
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&user_id).unwrap();
+        assert_eq!(account.available_balance(), initial_amount);
+        assert_eq!(account.held_balance(), Decimal::ZERO);
+        assert_eq!(account.total_balance(), initial_amount);
+    }
+
+    #[test]
+    fn test_multiple_unhold_operations() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(1000.00);
+        let hold_amount = dec!(500.00);
+        let unhold_amount = dec!(50.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        storage.hold_money(user_id, hold_amount).unwrap();
+
+        for i in 1..=5 {
+            let result = storage.unhold_money(user_id, unhold_amount);
+            assert!(result.is_ok());
+
+            let expected_available = dec!(500.00) + (unhold_amount * Decimal::from(i));
+            let expected_held = hold_amount - (unhold_amount * Decimal::from(i));
+
+            let accounts = storage.accounts.read().unwrap();
+            let account = accounts.get(&user_id).unwrap();
+            assert_eq!(account.available_balance(), expected_available);
+            assert_eq!(account.held_balance(), expected_held);
+            assert_eq!(account.total_balance(), initial_amount);
+        }
+
+        let result = storage.unhold_money(user_id, dec!(300.00));
+        assert!(result.is_err());
+
+        let accounts = storage.accounts.read().unwrap();
+        let account = accounts.get(&user_id).unwrap();
+        assert_eq!(account.available_balance(), dec!(750.00));
+        assert_eq!(account.held_balance(), dec!(250.00));
+    }
+
+    #[test]
+    fn test_block_account_successful() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+
+        assert_eq!(storage.is_locked(user_id), Some(false));
+
+        let result = storage.block_account(user_id);
+
+        assert!(result.is_ok());
+        assert_eq!(storage.is_locked(user_id), Some(true));
+    }
+
+    #[test]
+    fn test_block_nonexistent_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 999;
+
+        let result = storage.block_account(user_id);
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        let account_error = error.downcast_ref::<AccountError>().unwrap();
+        assert_eq!(*account_error, AccountError::AccountNotFound);
+    }
+
+    #[test]
+    fn test_block_already_locked_account() {
+        let storage = InMemoryAccountsStorage::new();
+        let user_id = 1;
+        let initial_amount = dec!(100.00);
+
+        storage.add_money(user_id, initial_amount).unwrap();
+        storage.block_account(user_id).unwrap();
+
+        assert_eq!(storage.is_locked(user_id), Some(true));
+
+        let result = storage.block_account(user_id);
+
+        assert!(result.is_ok());
+        assert_eq!(storage.is_locked(user_id), Some(true));
+    }
 }
